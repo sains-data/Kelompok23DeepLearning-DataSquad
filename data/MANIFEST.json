@@ -1,5 +1,7 @@
 {
-  "sumber": "https://… (tautan dataset dari kartu Kasus tim di Workbench)",
-  "berkas": ["data/latih.csv"],
-  "catatan": "Isi pada Sprint 0: versi/tanggal unduh, jumlah baris, dan perubahan (bila ada). Berkas data sendiri tidak di-commit."
+  "sumber": "Simulasi sintetis lokal untuk pengujian pipeline",
+  "berkas": [
+    "data/rekaman_simulasi_20261101_211839.csv"
+  ],
+  "catatan": "Data simulasi, bukan rekaman ESP32 asli"
 }
