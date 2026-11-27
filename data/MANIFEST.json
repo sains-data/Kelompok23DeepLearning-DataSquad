@@ -1,7 +1,10 @@
 {
-  "sumber": "Simulasi sintetis lokal untuk pengujian pipeline",
+  "sumber": "Sesi meja Ruang Cerdas 5 V tim 23: sesi-20261113-124856 (13 Nov 2026 12:48-14:14, 160/160 kondisi), arsip dari pengelola meja",
   "berkas": [
-    "data/rekaman_simulasi_20261101_211839.csv"
+    "data/sesi-20261113-124856/label.csv",
+    "data/sesi-20261113-124856/daya.csv",
+    "data/sesi-20261113-124856/aktuator.csv"
   ],
-  "catatan": "Data simulasi, bukan rekaman ESP32 asli"
+  "sha256_label_csv": "6bd52e02b841a9b4d894ff062b7ceff02b6e04971c6a974aed7814272405547b",
+  "catatan": "Berkas data tidak di-commit; ekstrak arsip sesi ke data/sesi-20261113-124856/. Hanya INA219 kipas terpasang (kanal total/pompa tidak ada). Perintah lampu tercatat terbalik, dikoreksi di src/protokol/data.py. Sesi uji 124151 dan 124243 tidak dipakai."
 }

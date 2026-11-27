@@ -1,0 +1,62 @@
+{
+  "seed": 2,
+  "konfigurasi": {
+    "kanal": "both",
+    "konteks": true,
+    "epoch": 40,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "dropout": 0.1,
+    "batch": 64
+  },
+  "ulangan": {
+    "latih": [
+      4,
+      5,
+      8,
+      9,
+      11,
+      12,
+      13,
+      16,
+      18,
+      20
+    ],
+    "val": [
+      3,
+      6,
+      17
+    ],
+    "uji": [
+      1,
+      2,
+      7,
+      10,
+      14,
+      15,
+      19
+    ]
+  },
+  "n_latih_normal": 899,
+  "n_val": 518,
+  "ambang": 0.1320570707321167,
+  "auroc_jendela": 0.7904,
+  "auroc_kondisi": 0.7833,
+  "f1_anomali": 0.6384,
+  "presisi": 0.8533,
+  "recall": 0.51,
+  "tp": 128,
+  "fp": 22,
+  "fn": 123,
+  "tn": 245,
+  "auroc_kondisi_per_keadaan": {
+    "kipas0_lampu0": 1.0,
+    "kipas0_lampu255": 1.0,
+    "kipas160_lampu0": 0.3333,
+    "kipas160_lampu255": 1.0
+  },
+  "n_parameter": 13370,
+  "latensi_ms": 0.154,
+  "loss_latih_akhir": 0.06097,
+  "ukuran_onnx_kb": 54.7
+}
