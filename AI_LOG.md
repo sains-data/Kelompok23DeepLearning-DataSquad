@@ -8,3 +8,4 @@ melainkan "mengerti atau tidak" — isi kolom terakhir dengan apa yang Anda ubah
 |---|---|---|---|---|
 | 2026-11-03 | 12345678 | Copilot | kerangka DataLoader | ganti normalisasi, tambah seed worker |
 | 2026-11-01 | 123450039 | Claude | panduan pemulihan akses GitHub, setup venv, uji baseline starter dengan contoh Fashion-MNIST, kerangka berkas Sprint 0 | perintah dijalankan sendiri; isi catatan dan log disesuaikan dengan pembagian tim |
+| 2026-11-28 | 123450039 | Claude | pemuat data sesi asli (src/protokol/data.py), kerangka AE dan skrip ringkasan, draf catatan model dan laporan individu | run 3 seed dan ablation dijalankan sendiri di laptop; konfigurasi utama (konteks) dipilih dari hasil validasi; teks catatan/laporan diperiksa dan disesuaikan |

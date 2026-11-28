@@ -1,208 +1,145 @@
+"""Pemuat data kasus Tim 23 (Deteksi anomali konsumsi daya) dari sesi meja asli.
 
-"""Pemuat data kasus tim: Deteksi anomali konsumsi daya.
-
-Data:
-- Sumber: rekaman arus dari ESP32.
-- Kanal: total, kipas, pompa.
-- Frekuensi: 200 Hz per kanal.
-- Window: 2 detik (400 sampel).
-- Label: 0 = normal, 1 = anomali.
-- Split: src.common.split, seed 2026.
+Sumber   : sesi meja ``sesi-20261113-124856`` (160 kondisi, 13 Nov 2026), berkas di
+           ``data/sesi-20261113-124856/`` dan tercantum di ``data/MANIFEST.json``.
+Label    : dari perintah skrip di label.csv -> pompa 0 = normal (0), pompa 255 = anomali (1).
+Masukan  : INA219 kipas (satu-satunya sensor arus yang terpasang), 2 kanal:
+           tegangan rel 5 V (``bus_mV``) dan arus kipas (``arus_mA``).
+           Rencana meminta arus total/kipas/pompa, tetapi INA219 total (0x44) dan pompa (0x41)
+           belum terpasang per 12 Nov (diakui di kartu Kasus tim). Pompa dideteksi tidak
+           langsung lewat penurunan tegangan rel karena semua alat berbagi catu 5 V.
+Jendela  : 2 s (400 sampel @ 200 Hz menurut jam ESP32), bergeser 1 s, detik pertama tiap
+           kondisi dibuang. Jendela dengan celah sampel > 50 ms ditolak.
+Kondisi  : kondisi yang perintah kipas/pompa di aktuator.csv tidak sesuai label dikeluarkan.
+Lampu    : perintah lampu tercatat terbalik (info dosen 13 Nov; lux lebih terang saat perintah 0).
+           label.csv TIDAK diubah; keadaan fisik lampu dikoreksi saat dibaca (``lampu_fisik``).
+Pemisahan: per ULANGAN (1-20) memakai ``src.common.split.indeks`` seed 2026:
+           7 ulangan uji, 3 ulangan validasi, 10 ulangan latih. Satu ulangan tidak pernah
+           muncul di dua bagian sekaligus.
 """
-
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from src.common import manifest, split
 
+TUGAS = "klasifikasi"  # ke penilai starter: 2 kelas (0 normal, 1 anomali)
 
-TUGAS = "klasifikasi"
-
-# Pengaturan dataset
-FOLDER = manifest.AKAR / "data"
-FREKUENSI = 200
-DURASI_WINDOW = 2
-SAMPEL_PER_WINDOW = FREKUENSI * DURASI_WINDOW
-
-# Buang 1 detik pertama setiap kondisi
-BUANG_DETIK = 1
-
-# Urutan kanal input model
-KANAL = ["total", "kipas", "pompa"]
-
-# Pemetaan nilai kanal jika ESP32 mengirim angka.
-# Sesuaikan jika firmware menggunakan kode berbeda.
-PEMETAAN_KANAL = {
-    "0": "total",
-    "1": "kipas",
-    "2": "pompa",
-    "total": "total",
-    "kipas": "kipas",
-    "pompa": "pompa",
-}
+# ---- pengaturan dataset -------------------------------------------------------
+SESI = "sesi-20261113-124856"
+FOLDER = manifest.AKAR / "data" / SESI
+FREKUENSI = 200          # Hz
+PANJANG = 2 * FREKUENSI  # 400 sampel = jendela 2 s
+GESER = 1.0              # detik
+BUANG_DETIK = 1.0        # detik pertama tiap kondisi dibuang (panduan bagian 9.1)
+CELAH_MAKS = 0.05        # detik; jendela dengan celah lebih panjang ditolak
+KANAL = ["bus_mV", "arus_mA"]
+VERSI_POTONG = "v2"     # naikkan bila aturan pemotongan berubah, agar cache dibuat ulang
+CACHE = manifest.AKAR / "data" / f"_cache_{SESI}.npz"
 
 
-def _baca_csv() -> pd.DataFrame:
-    """Membaca seluruh CSV hasil rekaman dari folder data."""
+# ---- langkah 1: baca dan selaraskan waktu ------------------------------------------
+def _baca_daya() -> tuple[np.ndarray, np.ndarray]:
+    """Kembalikan (t, sinyal[N, 2]) terurut waktu.
 
-    berkas = sorted(FOLDER.glob("rekaman_*.csv"))
+    Waktu memakai jam ESP32 (lebih rapat daripada jam laptop yang menerima per paket),
+    lalu digeser ke skala jam laptop agar cocok dengan t_mulai/t_selesai di label.csv.
+    """
+    d = pd.read_csv(FOLDER / "daya.csv")
+    d = d[d["kanal"] == "kipas"]
+    t_esp = d["t_esp_ms"].to_numpy(np.float64) / 1000.0
+    geser = np.median(d["t_host"].to_numpy(np.float64) - t_esp)
+    t = t_esp + geser
+    urut = np.argsort(t, kind="stable")          # 4 titik waktu mundur di data asli
+    return t[urut], d[KANAL].to_numpy(np.float32)[urut]
 
-    if not berkas:
-        raise FileNotFoundError(
-            "Tidak ditemukan rekaman_*.csv di folder data/. "
-            "Masukkan file hasil rekaman ESP32 terlebih dahulu."
-        )
 
-    daftar = []
+# ---- langkah 2: kondisi yang perintah alatnya tidak sesuai label -------------------------
+def kondisi_tidak_sesuai(lab: pd.DataFrame) -> list[int]:
+    """Nomor kondisi yang perintah kipas/pompa (aktuator.csv) berbeda dari label.
 
-    for file in berkas:
-        df = pd.read_csv(file)
-        df["sesi"] = file.stem
-        daftar.append(df)
+    Perintah yang berlaku pada detik ke-1 harus sama dengan label, dan tidak boleh berganti
+    ke nilai lain selama kondisi berjalan.
+    """
+    ak = pd.read_csv(FOLDER / "aktuator.csv").sort_values("t_host")
+    keluar = []
+    for r in lab.itertuples():
+        for alat in ("kipas", "pompa"):
+            a = ak[ak["nama"] == alat]
+            harap = getattr(r, alat) > 0
+            sebelum = a[a["t_host"] <= r.t_mulai_host + BUANG_DETIK]
+            # perintah "matikan" di akhir kondisi (±0,01 s sebelum t_selesai) tidak dihitung
+            dalam = a[(a["t_host"] > r.t_mulai_host + BUANG_DETIK) & (a["t_host"] < r.t_selesai_host - 0.1)]
+            ok = len(sebelum) > 0 and (sebelum["nilai"].iloc[-1] > 0) == harap
+            ok = ok and bool(((dalam["nilai"] > 0) == harap).all())
+            if not ok:
+                keluar.append(int(r.no))
+                break
+    return keluar
 
-    data = pd.concat(daftar, ignore_index=True)
 
-    kolom_wajib = {
-        "kondisi",
-        "ulangan",
-        "kipas",
-        "lampu",
-        "pompa",
-        "label",
-        "ms_esp32",
-        "kanal",
-        "arus_mA",
+# ---- langkah 3: potong jendela -------------------------------------------------------
+def _potong() -> dict[str, np.ndarray]:
+    lab = pd.read_csv(FOLDER / "label.csv")
+    t, s = _baca_daya()
+    keluar = set(kondisi_tidak_sesuai(lab))
+    X, meta = [], []
+    for r in lab.itertuples():
+        if int(r.no) in keluar:
+            continue
+        awal = r.t_mulai_host + BUANG_DETIK
+        while awal + 2.0 <= r.t_selesai_host + 1e-9:
+            i0, i1 = np.searchsorted(t, [awal, awal + 2.0])
+            tt = t[i0:i1]
+            utuh = len(tt) >= 2 and tt[0] - awal <= CELAH_MAKS and awal + 2.0 - tt[-1] <= CELAH_MAKS
+            if utuh and np.diff(tt).max() <= CELAH_MAKS:
+                # samakan ke 400 titik berjarak rata (interpolasi linear antar-sampel)
+                grid = awal + (np.arange(PANJANG) + 0.5) / FREKUENSI
+                X.append(np.stack([np.interp(grid, tt, s[i0:i1, k]) for k in range(len(KANAL))]))
+                meta.append((r.no, r.ulangan, r.kipas, r.lampu, r.pompa))
+            awal += GESER
+    meta = np.array(meta, dtype=np.int64)
+    return {
+        "X": np.asarray(X, dtype=np.float32),            # [N, 2, 400]
+        "y": (meta[:, 4] > 0).astype(np.int64),           # 1 = anomali (pompa menyala)
+        "no": meta[:, 0], "ulangan": meta[:, 1], "kipas": meta[:, 2],
+        "lampu_perintah": meta[:, 3],
+        "lampu_fisik": np.where(meta[:, 3] > 0, 0, 255),  # koreksi lampu terbalik
+        "keluar": np.array(sorted(keluar), dtype=np.int64),
     }
 
-    kurang = kolom_wajib - set(data.columns)
 
-    if kurang:
-        raise ValueError(
-            f"Kolom CSV tidak lengkap: {sorted(kurang)}"
-        )
+def jendela() -> dict[str, np.ndarray]:
+    """Semua jendela beserta metadatanya; disimpan sementara di data/ (tidak di-commit)."""
+    kunci = manifest.data_hash() + VERSI_POTONG
+    if CACHE.exists():
+        c = np.load(CACHE, allow_pickle=False)
+        if str(c["kunci"]) == kunci:
+            return {k: c[k] for k in c.files if k != "kunci"}
+    j = _potong()
+    np.savez_compressed(CACHE, kunci=kunci, **j)
+    return j
 
-    return data
+
+# ---- langkah 4: pemisahan per ulangan ------------------------------------------------
+def ulangan_split() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(ulangan latih, validasi, uji) dari 20 ulangan, beku dengan seed 2026."""
+    semua = np.arange(1, 21)
+    sisa, uji = split.indeks(len(semua), porsi_val=0.35)      # 7 ulangan uji
+    latih, val = split.indeks(len(sisa), porsi_val=0.23)      # 3 ulangan validasi
+    return np.sort(semua[sisa][latih]), np.sort(semua[sisa][val]), np.sort(semua[uji])
 
 
-def _buat_window(data: pd.DataFrame):
-    """Mengubah data arus mentah menjadi window berukuran (400, 3)."""
-
-    X = []
-    y = []
-    groups = []
-
-    # Satu rekaman = satu kombinasi kondisi dan ulangan
-    kolom_grup = ["sesi", "kondisi", "ulangan"]
-
-    for identitas, bagian in data.groupby(kolom_grup, sort=True):
-
-        bagian = bagian.copy()
-
-        # Konversi kode kanal menjadi nama kanal
-        bagian["kanal"] = (
-            bagian["kanal"].astype(str).str.strip().str.lower()
-            .map(PEMETAAN_KANAL)
-        )
-
-        if bagian["kanal"].isna().any():
-            raise ValueError(
-                "Ada kode kanal yang belum dikenali. "
-                "Periksa PEMETAAN_KANAL."
-            )
-
-        # Susun data menjadi matriks waktu x kanal
-        lebar = bagian.pivot_table(
-            index="ms_esp32",
-            columns="kanal",
-            values="arus_mA",
-            aggfunc="mean",
-        )
-
-        # Pastikan ketiga kanal tersedia
-        if not set(KANAL).issubset(lebar.columns):
-            continue
-
-        lebar = lebar[KANAL].sort_index()
-
-        # Buang data satu detik pertama
-        jumlah_buang = int(BUANG_DETIK * FREKUENSI)
-        lebar = lebar.iloc[jumlah_buang:]
-
-        nilai = lebar.to_numpy(dtype=np.float32)
-
-        # Label kondisi
-        label = int(bagian["label"].iloc[0])
-
-        if label not in (0, 1):
-            raise ValueError(f"Label tidak valid: {label}")
-
-        # Bentuk window 400 sampel
-        jumlah_window = len(nilai) // SAMPEL_PER_WINDOW
-
-        for i in range(jumlah_window):
-            awal = i * SAMPEL_PER_WINDOW
-            akhir = awal + SAMPEL_PER_WINDOW
-
-            window = nilai[awal:akhir]
-
-            # Lewati window yang mengandung nilai kosong
-            if not np.isfinite(window).all():
-                continue
-
-            X.append(window)
-            y.append(label)
-            groups.append(identitas)
-
-    if not X:
-        raise ValueError(
-            "Tidak ada window yang berhasil dibuat. "
-            "Periksa jumlah sampel, frekuensi, dan nama kanal."
-        )
-
-    return (
-        np.asarray(X, dtype=np.float32),
-        np.asarray(y, dtype=np.int64),
-        np.asarray(groups, dtype=object),
-    )
+def bagian(nama: str) -> np.ndarray:
+    """Indeks jendela untuk 'latih' | 'val' | 'uji'."""
+    j = jendela()
+    u = dict(zip(("latih", "val", "uji"), ulangan_split()))[nama]
+    return np.flatnonzero(np.isin(j["ulangan"], u))
 
 
 def muat():
-    """Mengembalikan data training, validasi, dan testing."""
-
-    # 1. Baca data mentah
-    data = _baca_csv()
-
-    # 2. Bentuk window
-    X, y, groups = _buat_window(data)
-
-    # 3. Split dengan fungsi resmi starter
-    tr, va = split.indeks(len(X), porsi_val=0.1)
-
-    X_train = X[tr]
-    y_train = y[tr]
-
-    X_val = X[va]
-    y_val = y[va]
-
-    # 4. Tidak ada file test terpisah pada dataset ini
-    X_test = None
-    y_test = None
-
-    print("Berhasil memuat dataset!")
-    print("Bentuk X:", X.shape)
-    print("Jumlah training:", len(X_train))
-    print("Jumlah validasi:", len(X_val))
-    print("Distribusi label:", np.unique(y, return_counts=True))
-
-    return (
-        X_train,
-        y_train,
-        X_val,
-        y_val,
-        X_test,
-        y_test,
-    )
+    """Kontrak starter: (X_train, y_train, X_val, y_val, X_test, y_test), X = [N, 2, 400]."""
+    j = jendela()
+    il, iv, iu = bagian("latih"), bagian("val"), bagian("uji")
+    return j["X"][il], j["y"][il], j["X"][iv], j["y"][iv], j["X"][iu], j["y"][iu]
