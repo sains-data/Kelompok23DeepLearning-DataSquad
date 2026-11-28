@@ -1,13 +1,15 @@
 {
-  "metrik": {
-    "val_acc": 1.0,
-    "val_macro_f1": 1.0
-  },
+  "model": "IsolationForest",
   "seed": 2026,
-  "data_hash": "52af3ea6225c46ba2e00b2e422dd7a1d",
-  "perangkat": "cpu laptop",
-  "model": "baseline",
-  "n_val": 224,
-  "n_test": 0,
-  "durasi_detik": 8.3
+  "metrik": {
+    "val_auroc": 0.6575346553859468,
+    "val_f1": 0.6610169491525424,
+    "test_auroc": 0.7518886446886448,
+    "test_f1": 0.6288105200239091,
+    "test_accuracy": 0.46968403074295473
+  },
+  "threshold": -0.05106510302797429,
+  "n_train": 1754,
+  "n_val": 518,
+  "n_test": 1171
 }
