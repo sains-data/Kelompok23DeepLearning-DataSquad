@@ -1,7 +1,7 @@
 {
   "metrik": {
-    "val_acc": 0.84749,
-    "val_macro_f1": 0.847444
+    "val_acc": 0.841699,
+    "val_macro_f1": 0.841678
   },
   "seed": 1,
   "data_hash": "f232927dd68ea75affe1962704e487fd",
@@ -9,5 +9,5 @@
   "model": "rnn",
   "n_val": 518,
   "n_test": 0,
-  "durasi_detik": 96.1
+  "durasi_detik": 25.2
 }

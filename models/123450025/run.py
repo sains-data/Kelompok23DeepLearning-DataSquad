@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import subprocess
 import sys
 import time
@@ -44,6 +45,29 @@ class ModelGRU(nn.Module):
         _, hidden = self.gru(x)
         fitur = hidden[-1]
         return self.classifier(fitur)
+
+
+def auroc(y, skor) -> float:
+    """AUROC berbasis peringkat (Mann-Whitney U), menangani nilai kembar.
+
+    Sumber: fungsi auroc() di models/123450039/run.py (Feby), disalin ke sini.
+    """
+    y = np.asarray(y).astype(bool)
+    skor = np.asarray(skor, dtype=np.float64)
+    n1, n0 = int(y.sum()), int((~y).sum())
+    if n1 == 0 or n0 == 0:
+        return float("nan")
+    urut = np.argsort(skor, kind="mergesort")
+    s = skor[urut]
+    peringkat = np.empty(len(s), dtype=np.float64)
+    i = 0
+    while i < len(s):
+        j = i
+        while j + 1 < len(s) and s[j + 1] == s[i]:
+            j += 1
+        peringkat[urut[i:j + 1]] = (i + j) / 2 + 1
+        i = j + 1
+    return float((peringkat[y].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
 
 
 def latih_dan_prediksi(seed: int, final: bool):
@@ -156,14 +180,22 @@ def latih_dan_prediksi(seed: int, final: bool):
     model.eval()
 
     with torch.no_grad():
-        pred_val = model(x_val).argmax(dim=1).numpy()
+        logit_val = model(x_val)
+        pred_val = logit_val.argmax(dim=1).numpy()
+        # peluang kelas anomali (kelas 1) untuk menghitung AUROC
+        prob_val = torch.softmax(logit_val, dim=1)[:, 1].numpy()
 
         pred_test = None
         if final and Xte is not None:
             x_test = siapkan_input(Xte)
             pred_test = model(x_test).argmax(dim=1).numpy()
 
-    return pred_val, pred_test
+    tambahan = {
+        "seed": seed,
+        "auroc_jendela": round(auroc(y_val, prob_val), 4),
+        "n_parameter": int(sum(p.numel() for p in model.parameters())),
+    }
+    return pred_val, pred_test, prob_val, tambahan
 
 
 def main():
@@ -174,13 +206,18 @@ def main():
     args = parser.parse_args()
 
     mulai = time.time()
-    pred_val, pred_test = latih_dan_prediksi(args.seed, args.final)
+    pred_val, pred_test, prob_val, tambahan = latih_dan_prediksi(args.seed, args.final)
     durasi = time.time() - mulai
 
     out = AKAR / "results" / NIM
     out.mkdir(parents=True, exist_ok=True)
 
     np.save(out / "pred_val.npy", pred_val)
+    np.save(out / "prob_val.npy", prob_val)
+    (out / f"tambahan_seed{args.seed}.json").write_text(
+        json.dumps(tambahan, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"AUROC validasi (per jendela): {tambahan['auroc_jendela']}")
 
     perintah = [
         sys.executable,
