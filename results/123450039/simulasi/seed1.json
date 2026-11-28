@@ -1,0 +1,86 @@
+{
+  "seed": 1,
+  "durasi_detik": 19.4,
+  "sumber_data": "simulasi sintetis",
+  "bentuk": {
+    "jendela_mentah": [
+      4000,
+      2,
+      400
+    ],
+    "masukan_model": [
+      8,
+      4,
+      400
+    ],
+    "keluaran_model": [
+      8,
+      2,
+      400
+    ],
+    "target_rekonstruksi": [
+      8,
+      2,
+      400
+    ]
+  },
+  "konfigurasi": {
+    "kanal": "both",
+    "konteks": true,
+    "epoch": 40,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "dropout": 0.1,
+    "batch": 64
+  },
+  "ulangan": {
+    "latih": [
+      4,
+      5,
+      8,
+      9,
+      11,
+      12,
+      13,
+      16,
+      18,
+      20
+    ],
+    "val": [
+      3,
+      6,
+      17
+    ],
+    "uji": [
+      1,
+      2,
+      7,
+      10,
+      14,
+      15,
+      19
+    ]
+  },
+  "n_latih_normal": 1000,
+  "n_val": 600,
+  "ambang": 0.003497330006211996,
+  "auroc_jendela": 1.0,
+  "auroc_kondisi": 1.0,
+  "f1_anomali": 0.9756,
+  "presisi": 0.9524,
+  "recall": 1.0,
+  "tp": 300,
+  "fp": 15,
+  "fn": 0,
+  "tn": 285,
+  "auroc_kondisi_per_keadaan": {
+    "kipas0_lampu0": 1.0,
+    "kipas0_lampu255": 1.0,
+    "kipas160_lampu0": 1.0,
+    "kipas160_lampu255": 1.0
+  },
+  "n_parameter": 13370,
+  "latensi_ms": 0.145,
+  "loss_latih_akhir": 0.00418,
+  "ukuran_onnx_kb": 54.7
+}

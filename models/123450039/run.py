@@ -123,6 +123,39 @@ def skor_rekonstruksi(model, Z: np.ndarray, c_sinyal: int) -> np.ndarray:
     return np.concatenate(hasil)
 
 
+# ---- data simulasi (uji kerangka tanpa data meja) ---------------------------------------
+def jendela_simulasi(seed: int = 0) -> dict[str, np.ndarray]:
+    """Jendela sintetis berformat SAMA dengan data.jendela(): X [N, 2, 400] + metadata.
+
+    Meniru rencana t23: 8 kombinasi (kipas 0/160, lampu 0/255, pompa 0/255) x 20 ulangan,
+    25 jendela per kondisi. Angkanya BUKAN pengukuran: tegangan rel turun bila kipas/lampu/pompa
+    menyala, arus kipas naik bila kipas menyala, ditambah riak dan derau. Dipakai hanya untuk
+    memastikan kerangka run.py berjalan dan bentuk masukan/keluaran model sesuai.
+    """
+    rng = np.random.default_rng(seed)
+    t = np.arange(data.PANJANG) / data.FREKUENSI
+    X, meta, no = [], [], 0
+    for ul in range(1, 21):
+        for kp in (0, 160):
+            for lp in (0, 255):
+                for pp in (0, 255):
+                    no += 1
+                    for _ in range(25):
+                        bus = 5060 - 1.3 * kp - 0.7 * lp - 0.6 * pp + rng.normal(0, 8, data.PANJANG)
+                        arus = (kp > 0) * (150 - 0.06 * pp + 30 * np.sin(2 * np.pi * 25 * t)) + rng.normal(0, 3, data.PANJANG)
+                        X.append(np.stack([bus, arus]))
+                        meta.append((no, ul, kp, lp, pp))
+    m = np.array(meta, dtype=np.int64)
+    return {"X": np.asarray(X, dtype=np.float32), "y": (m[:, 4] > 0).astype(np.int64), "no": m[:, 0],
+            "ulangan": m[:, 1], "kipas": m[:, 2], "lampu_perintah": 255 - m[:, 3], "lampu_fisik": m[:, 3]}
+
+
+def bagian_dari(j: dict, nama: str) -> np.ndarray:
+    """Pemisahan per ulangan yang sama dengan protokol tim (data.ulangan_split)."""
+    u = dict(zip(("latih", "val", "uji"), data.ulangan_split()))[nama]
+    return np.flatnonzero(np.isin(j["ulangan"], u))
+
+
 # ---- latih dan nilai ---------------------------------------------------------------------
 def latih_dan_prediksi(a) -> tuple[np.ndarray, np.ndarray | None, dict]:
     import torch
@@ -131,8 +164,8 @@ def latih_dan_prediksi(a) -> tuple[np.ndarray, np.ndarray | None, dict]:
     np.random.seed(a.seed)
     torch.set_num_threads(max(1, torch.get_num_threads()))
 
-    j = data.jendela()
-    il, iv, iu = data.bagian("latih"), data.bagian("val"), data.bagian("uji")
+    j = jendela_simulasi(a.seed) if a.simulasi else data.jendela()
+    il, iv, iu = bagian_dari(j, "latih"), bagian_dari(j, "val"), bagian_dari(j, "uji")
     kanal = {"both": [0, 1], "bus": [0], "arus": [1]}[a.kanal]
     c_sinyal = len(kanal)
 
@@ -143,6 +176,14 @@ def latih_dan_prediksi(a) -> tuple[np.ndarray, np.ndarray | None, dict]:
 
     Z_lat = siapkan(j["X"][il_normal], il_normal, j, kanal, a.konteks, mu, sd)
     model = buat_model(Z_lat.shape[1], c_sinyal, a.dropout)
+    with torch.no_grad():
+        contoh_keluaran = model(torch.from_numpy(Z_lat[:8]))
+    bentuk = {"jendela_mentah": list(j["X"].shape), "masukan_model": list(Z_lat[:8].shape),
+              "keluaran_model": list(contoh_keluaran.shape), "target_rekonstruksi": [8, c_sinyal, Z_lat.shape[2]]}
+    print("Bentuk jendela mentah   :", bentuk["jendela_mentah"], "(N, kanal sinyal, sampel)")
+    print("Bentuk masukan model    :", bentuk["masukan_model"], "(batch, kanal sinyal + konteks, sampel)")
+    print("Bentuk keluaran model   :", bentuk["keluaran_model"], "(batch, kanal sinyal, sampel) = rekonstruksi")
+    assert list(contoh_keluaran.shape) == bentuk["target_rekonstruksi"], "keluaran harus sama bentuk dengan sinyal masukan"
     opt = torch.optim.Adam(model.parameters(), lr=a.lr, weight_decay=a.weight_decay)
 
     gen = torch.Generator().manual_seed(a.seed)
@@ -189,6 +230,8 @@ def latih_dan_prediksi(a) -> tuple[np.ndarray, np.ndarray | None, dict]:
     latensi_ms = (time.perf_counter() - t0) / 200 * 1000
 
     tambahan = {
+        "sumber_data": "simulasi sintetis" if a.simulasi else data.SESI,
+        "bentuk": bentuk,
         "konfigurasi": {"kanal": a.kanal, "konteks": a.konteks, "epoch": a.epoch, "lr": a.lr,
                         "weight_decay": a.weight_decay, "dropout": a.dropout, "batch": a.batch},
         "ulangan": {k: v.tolist() for k, v in zip(("latih", "val", "uji"), data.ulangan_split())},
@@ -237,6 +280,8 @@ def main() -> None:
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--simulasi", action="store_true",
+                    help="uji kerangka pada data sintetis (tidak menulis metrics.json resmi)")
     a = ap.parse_args()
 
     # konfigurasi utama dipilih dari validasi Sprint 1 (lihat catatan.md): 2 kanal + konteks
@@ -244,6 +289,16 @@ def main() -> None:
     t0 = time.time()
     pred_val, pred_test, tambahan = latih_dan_prediksi(a)
     durasi = time.time() - t0
+
+    if a.simulasi:
+        # penilai resmi memakai label data meja, jadi hasil simulasi disimpan terpisah
+        sim = AKAR / "results" / NIM / "simulasi"
+        sim.mkdir(parents=True, exist_ok=True)
+        (sim / f"seed{a.seed}.json").write_text(json.dumps({"seed": a.seed, "durasi_detik": round(durasi, 1), **tambahan},
+                                                           indent=2) + "\n", encoding="utf-8")
+        print(f"[simulasi seed {a.seed}] selesai {durasi:.0f} s | AUROC kondisi {tambahan['auroc_kondisi']} | "
+              f"jendela val {tambahan['n_val']} -> results/{NIM}/simulasi/seed{a.seed}.json")
+        return
 
     out = AKAR / "results" / NIM
     sub = out / nama / f"seed{a.seed}"
